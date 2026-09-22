@@ -3,6 +3,7 @@ pyproject.toml
 src/financial_lakehouse/__init__.py
 src/financial_lakehouse/bronze.py
 src/financial_lakehouse/config.py
+src/financial_lakehouse/datasets.py
 src/financial_lakehouse/gold.py
 src/financial_lakehouse/ingestion.py
 src/financial_lakehouse/pipeline.py
