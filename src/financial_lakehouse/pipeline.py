@@ -23,9 +23,7 @@ def run_pipeline(
 
     print("Starting financial market data lakehouse pipeline.")
 
-    # --------------------------------------------------
-    # 1. Ingestion
-    # --------------------------------------------------
+    # data ingestion
 
     market_data = download_market_data(
         tickers=tickers,
@@ -33,35 +31,25 @@ def run_pipeline(
         end_date=end_date,
     )
 
-    # --------------------------------------------------
-    # 2. Bronze
-    # --------------------------------------------------
+    # bronze layer
 
     write_market_data_to_bronze(market_data)
 
-    # --------------------------------------------------
-    # 3. Read Bronze
-    # --------------------------------------------------
+    # read bronze layer
 
     bronze_df = spark.read.parquet(str(BRONZE_DIR))
 
-    # --------------------------------------------------
-    # 4. Silver
-    # --------------------------------------------------
+    # build and write silver
 
     silver_df = build_silver(bronze_df)
     write_silver(silver_df)
 
-    # --------------------------------------------------
-    # 5. Gold
-    # --------------------------------------------------
+    # build and write gold
 
     gold_df = build_gold(silver_df)
     write_gold(gold_df)
 
-    # --------------------------------------------------
-    # 6. Downstream datasets
-    # --------------------------------------------------
+    # downstream datasets
 
     time_series_df = build_time_series_dataset(gold_df)
     classification_df = build_classification_dataset(gold_df)
