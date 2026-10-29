@@ -1,75 +1,64 @@
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import types as T
 
-from .config import BRONZE_DIR
+from .config import BRONZE_PRICES
+from .storage import write_table
 
 
-def write_ticker_to_bronze(
-    df: pd.DataFrame,
-    ticker: str,
-    output_dir: Path = BRONZE_DIR,
-) -> tuple[str, int]:
+# Bronze keeps the source values as delivered. Prices are stored as
+# doubles and nothing is filtered, deduplicated, or corrected here.
+BRONZE_SCHEMA = T.StructType([
+    T.StructField("date", T.DateType()),
+    T.StructField("open", T.DoubleType()),
+    T.StructField("high", T.DoubleType()),
+    T.StructField("low", T.DoubleType()),
+    T.StructField("close", T.DoubleType()),
+    T.StructField("adj_close", T.DoubleType()),
+    T.StructField("volume", T.LongType()),
+    T.StructField("ticker", T.StringType()),
+    T.StructField("source", T.StringType()),
+    T.StructField("ingestion_id", T.StringType()),
+    T.StructField("ingested_at", T.TimestampType()),
+])
+
+
+def to_bronze_dataframe(
+    spark: SparkSession,
+    market_data: pd.DataFrame,
+) -> DataFrame:
+    """Convert downloaded market data to a Spark DataFrame with the Bronze schema."""
+
+    pdf = market_data[BRONZE_SCHEMA.fieldNames()].copy()
+
+    # yfinance returns float volume when values are missing; Bronze keeps
+    # nulls as nulls rather than dropping the record.
+    pdf["volume"] = pdf["volume"].astype("Int64")
+
+    # Hand Spark an Arrow table directly; pandas 3 Arrow-backed columns
+    # otherwise fail the pandas -> Arrow fast path.
+    return spark.createDataFrame(
+        pa.Table.from_pandas(pdf, preserve_index=False),
+        schema=BRONZE_SCHEMA,
+    )
+
+
+def write_bronze(
+    df: DataFrame,
+    output_dir: Path = BRONZE_PRICES,
+) -> None:
     """
-    Write ticker data to partitioned Bronze Parquet.
+    Append a raw ingestion batch to the Bronze Delta table.
 
-    Partitions are organized by ticker, year, and month.
-
-    Returns:
-        Tuple containing the ticker and number of rows written.
+    Bronze is append-only: every ingestion is retained with its
+    ingestion_id, giving a full replayable history of the source.
     """
-    df = df.copy()
-
-    # Convert date for partitioning and downstream processing.
-    df["Date"] = pd.to_datetime(df["Date"])
-
-    # Create partition columns.
-    df["year"] = df["Date"].dt.year
-    df["month"] = df["Date"].dt.month.astype(str).str.zfill(2)
-
-    for (year, month), partition_df in df.groupby(["year", "month"]):
-        partition_path = (
-            output_dir
-            / f"ticker={ticker}"
-            / f"year={year}"
-            / f"month={month}"
-        )
-
-        partition_path.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        output_file = partition_path / "data.parquet"
-
-        (
-            partition_df
-            .drop(columns=["ticker", "year", "month"])
-            .to_parquet(
-                output_file,
-                index=False,
-                engine="pyarrow",
-            )
-        )
-
-    return ticker, len(df)
-
-
-def write_market_data_to_bronze(
-    market_data: dict[str, pd.DataFrame],
-    output_dir: Path = BRONZE_DIR,
-) -> list[tuple[str, int]]:
-    """
-    Write multiple ticker DataFrames to partitioned Bronze Parquet.
-
-    Returns:
-        List of ticker and row-count tuples.
-    """
-    return [
-        write_ticker_to_bronze(
-            df=df,
-            ticker=ticker,
-            output_dir=output_dir,
-        )
-        for ticker, df in market_data.items()
-    ]
+    write_table(
+        df,
+        output_dir,
+        mode="append",
+        partition_by=["ticker"],
+    )
